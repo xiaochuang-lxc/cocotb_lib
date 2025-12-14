@@ -30,7 +30,7 @@ from cocotb.triggers import RisingEdge, Event, First, Timer
 from cocotb_bus.bus import Bus
 from cocotbext.axi.reset import Reset
 from cocotb.result import TestFailure
-
+import vsc
 
 class StreamExtBus(Bus):
 
@@ -84,6 +84,24 @@ class StreamExtTransaction:
             if(getattr(self,item)!=getattr(value,item)):
                 raise TestFailure(f"{type(self).__name__}:dut {item} value:{hex(getattr(self,item))},ref {item}  value:{hex(getattr(value,item))}")
         return True
+@vsc.randobj
+class StreamExtRandomTransaction(StreamExtTransaction):
+    _itemMap={}#{"data0":(0,16,True),"data1":(16,16,True)} key:(offset,width,has_random)
+    def __init__(self, *args, **kwargs):
+        for sig in self._signals:
+            setattr(self, sig, 0)
+        for item,attr in self._itemMap.items():
+            if item in kwargs:
+                if(attr[2]):#Random Value
+                    setattr(self,item,vsc.rand_bit_t(attr[1],kwargs[item]))
+                else:
+                    setattr(self,item,kwargs[item])
+                del kwargs[item]
+            else:
+                if(attr[2]):#Random Value
+                    setattr(self,item,vsc.rand_bit_t(attr[1],0))
+                else:
+                    setattr(self,item,0)
 
 class StreamExtBase(Reset):
 
@@ -527,3 +545,62 @@ def define_streamext(name, item_map, signals=["payload","valid","ready"], option
     monitor = type(name+"Monitor", (StreamExtMonitor,), attrib)
 
     return bus, transaction, source, sink, monitor
+
+
+def define_streamext_with_rand_transaction(name, transaction, signals=["payload","valid","ready"], optional_signals=None, valid_signal=None, ready_signal=None, signal_widths=None):
+    all_signals = signals.copy()
+
+    if optional_signals is None:
+        optional_signals = []
+    else:
+        all_signals += optional_signals
+
+    if valid_signal is None:
+        for s in all_signals:
+            if s.lower().endswith('valid'):
+                valid_signal = s
+    if valid_signal not in all_signals:
+        signals += valid_signal
+
+    if ready_signal is None:
+        for s in all_signals:
+            if s.lower().endswith('ready'):
+                ready_signal = s
+    else:
+        if ready_signal not in all_signals:
+            signals += ready_signal
+
+    if signal_widths is None:
+        signal_widths = {}
+
+    if valid_signal not in signal_widths:
+        signal_widths[valid_signal] = 1
+
+    if ready_signal not in signal_widths:
+        signal_widths[ready_signal] = 1
+
+    filtered_signals = []
+
+    for s in all_signals:
+        if s not in (ready_signal, valid_signal):
+            filtered_signals.append(s)
+
+    attrib = {}
+    attrib['_signals'] = signals
+    attrib['_optional_signals'] = optional_signals
+    bus = type(name+"Bus", (StreamExtBus,), attrib)
+
+    attrib = {}
+    attrib['_signals'] = signals
+    attrib['_optional_signals'] = optional_signals
+    attrib['_signal_widths'] = signal_widths
+    attrib['_ready_signal'] = ready_signal
+    attrib['_valid_signal'] = valid_signal
+    attrib['_transaction_obj'] = transaction
+    attrib['_bus_obj'] = bus
+
+    source = type(name+"Source", (StreamExtSource,), attrib)
+    sink = type(name+"Sink", (StreamExtSink,), attrib)
+    monitor = type(name+"Monitor", (StreamExtMonitor,), attrib)
+
+    return bus, source, sink, monitor
